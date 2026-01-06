@@ -34,8 +34,6 @@ import Web.HTML.HTMLElement (HTMLElement) as DOM
 import Web.HTML.HTMLElement as HTMLElement
 import Web.HTML.Window (document) as DOM
 
-import Effect.Class.Console ( log )
-
 type VHTML action slots =
   V.VDom (Array (Prop (Input action))) (ComponentSlot slots Aff action)
 
@@ -47,8 +45,6 @@ newtype RenderState state action slots output =
     , machine :: V.Step (VHTML action slots) DOM.Node
     , renderChildRef :: Ref (ChildRenderer action slots)
     }
-
-foreign import pp :: DOM.Node -> Effect Unit
 
 type HTMLThunk slots action =
   Thunk (HTML (ComponentSlot slots Aff action)) action
@@ -167,7 +163,6 @@ renderSpec document container =
         void $ DOM.appendChild node (HTMLElement.toNode container)
         pure $ RenderState { machine, node, renderChildRef }
       Just (RenderState { machine, node, renderChildRef }) -> do
-        pp node
         Ref.write child renderChildRef
         parent <- DOM.parentNode node
         nextSib <- DOM.nextSibling node

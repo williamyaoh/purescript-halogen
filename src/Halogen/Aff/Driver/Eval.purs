@@ -25,7 +25,6 @@ import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, error, finally, joinFiber, killFiber, runAff_)
 import Effect.Class (liftEffect)
-import Effect.Class.Console (log)
 import Effect.Exception (throwException)
 import Effect.Ref (Ref)
 import Effect.Ref as Ref
@@ -74,7 +73,13 @@ evalM
   -> Ref (DriverState r s f act ps i o)
   -> HalogenM s act ps o Aff a
   -> Aff a
-evalM render initRef (HalogenM hm) = foldFree (go initRef) hm
+evalM render initRef (HalogenM hm) = do
+  DriverState { state } <- liftEffect $ Ref.read initRef
+  result <- foldFree (go initRef) hm
+  DriverState { state: state', lifecycleHandlers } <- liftEffect $ Ref.read initRef
+  unless (unsafeRefEq state state') do
+    handleLifecycle lifecycleHandlers (render lifecycleHandlers initRef)
+  pure result
   where
   go
     :: forall s' f' act' ps' i' o' a'
@@ -83,13 +88,12 @@ evalM render initRef (HalogenM hm) = foldFree (go initRef) hm
     -> Aff a'
   go ref = case _ of
     State f -> do
-      DriverState (st@{ state, lifecycleHandlers }) <- liftEffect (Ref.read ref)
+      DriverState (st@{ state }) <- liftEffect (Ref.read ref)
       case f state of
         Tuple a state'
           | unsafeRefEq state state' -> pure a
           | otherwise -> do
               liftEffect $ Ref.write (DriverState (st { state = state' })) ref
-              handleLifecycle lifecycleHandlers (render lifecycleHandlers ref)
               pure a
     Subscribe fes k -> do
       sid <- fresh SubscriptionId ref
@@ -169,7 +173,7 @@ handleLifecycle lchs f = do
   result <- liftEffect f
   { initializers, finalizers } <- liftEffect $ Ref.read lchs
   traverse_ fork finalizers
-  parSequence_ $ map (\m -> liftEffect (log "running an initializer") *> m) initializers
+  parSequence_ initializers
   pure result
 
 fresh
