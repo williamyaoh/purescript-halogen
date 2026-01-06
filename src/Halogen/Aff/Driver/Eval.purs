@@ -25,6 +25,7 @@ import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff, error, finally, joinFiber, killFiber, runAff_)
 import Effect.Class (liftEffect)
+import Effect.Class.Console (log)
 import Effect.Exception (throwException)
 import Effect.Ref (Ref)
 import Effect.Ref as Ref
@@ -168,7 +169,7 @@ handleLifecycle lchs f = do
   result <- liftEffect f
   { initializers, finalizers } <- liftEffect $ Ref.read lchs
   traverse_ fork finalizers
-  parSequence_ initializers
+  parSequence_ $ map (\m -> liftEffect (log "running an initializer") *> m) initializers
   pure result
 
 fresh

@@ -34,6 +34,8 @@ import Web.HTML.HTMLElement (HTMLElement) as DOM
 import Web.HTML.HTMLElement as HTMLElement
 import Web.HTML.Window (document) as DOM
 
+import Effect.Class.Console ( log )
+
 type VHTML action slots =
   V.VDom (Array (Prop (Input action))) (ComponentSlot slots Aff action)
 
@@ -153,8 +155,9 @@ renderSpec document container =
     -> HTML (ComponentSlot slots Aff action) action
     -> Maybe (RenderState state action slots output)
     -> Effect (RenderState state action slots output)
-  render handler child (HTML vdom) =
-    case _ of
+  render handler child (HTML vdom) mstate = do
+    log "rendering!"
+    case mstate of
       Nothing -> do
         renderChildRef <- Ref.new child
         let spec = mkSpec handler renderChildRef document
