@@ -48,6 +48,8 @@ newtype RenderState state action slots output =
     , renderChildRef :: Ref (ChildRenderer action slots)
     }
 
+foreign import pp :: DOM.Node -> Effect Unit
+
 type HTMLThunk slots action =
   Thunk (HTML (ComponentSlot slots Aff action)) action
 
@@ -156,7 +158,6 @@ renderSpec document container =
     -> Maybe (RenderState state action slots output)
     -> Effect (RenderState state action slots output)
   render handler child (HTML vdom) mstate = do
-    log "rendering!"
     case mstate of
       Nothing -> do
         renderChildRef <- Ref.new child
@@ -166,6 +167,7 @@ renderSpec document container =
         void $ DOM.appendChild node (HTMLElement.toNode container)
         pure $ RenderState { machine, node, renderChildRef }
       Just (RenderState { machine, node, renderChildRef }) -> do
+        pp node
         Ref.write child renderChildRef
         parent <- DOM.parentNode node
         nextSib <- DOM.nextSibling node
