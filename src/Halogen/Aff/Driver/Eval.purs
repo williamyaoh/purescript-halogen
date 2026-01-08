@@ -74,73 +74,75 @@ evalM
   -> HalogenM s act ps o Aff a
   -> Aff a
 evalM render initRef (HalogenM hm) = do
-  DriverState { state } <- liftEffect $ Ref.read initRef
-  result <- foldFree (go initRef) hm
-  DriverState { state: state', lifecycleHandlers } <- liftEffect $ Ref.read initRef
-  unless (unsafeRefEq state state') do
-    handleLifecycle lifecycleHandlers (render lifecycleHandlers initRef)
+  DriverState { state: st } <- liftEffect $ Ref.read initRef
+  stref <- liftEffect $ Ref.new st
+  result <- foldFree (go stref initRef) hm
+  maybeRerender stref initRef
   pure result
   where
   go
     :: forall s' f' act' ps' i' o' a'
-     . Ref (DriverState r s' f' act' ps' i' o')
+     . Ref s'
+    -> Ref (DriverState r s' f' act' ps' i' o')
     -> HalogenF s' act' ps' o' Aff a'
     -> Aff a'
-  go ref = case _ of
+  go stref dsref = case _ of
     State f -> do
-      DriverState (st@{ state }) <- liftEffect (Ref.read ref)
+      DriverState (st@{ state }) <- liftEffect (Ref.read dsref)
       case f state of
         Tuple a state'
           | unsafeRefEq state state' -> pure a
           | otherwise -> do
-              liftEffect $ Ref.write (DriverState (st { state = state' })) ref
+              liftEffect $ Ref.write (DriverState (st { state = state' })) dsref
               pure a
     Subscribe fes k -> do
-      sid <- fresh SubscriptionId ref
+      sid <- fresh SubscriptionId dsref
       finalize <- liftEffect $ HS.subscribe (fes sid) \act ->
-        handleAff $ evalF render ref (Input.Action act)
-      DriverState ({ subscriptions }) <- liftEffect (Ref.read ref)
+        handleAff $ evalF render dsref (Input.Action act)
+      DriverState ({ subscriptions }) <- liftEffect (Ref.read dsref)
       liftEffect $ Ref.modify_ (map (M.insert sid finalize)) subscriptions
       pure (k sid)
     Unsubscribe sid next -> do
-      liftEffect $ unsubscribe sid ref
+      liftEffect $ unsubscribe sid dsref
       pure next
     Lift aff ->
       aff
-    ChildQuery cq ->
-      evalChildQuery ref cq
+    ChildQuery cq -> do
+      maybeRerender stref dsref
+      evalChildQuery dsref cq
     Raise o a -> do
-      DriverState { handlerRef, pendingOuts } <- liftEffect (Ref.read ref)
+      DriverState { handlerRef, pendingOuts } <- liftEffect (Ref.read dsref)
       handler <- liftEffect (Ref.read handlerRef)
       queueOrRun pendingOuts (handler o)
       pure a
     Par (HalogenAp p) ->
-      sequential $ retractFreeAp $ hoistFreeAp (parallel <<< evalM render ref) p
+      sequential $ retractFreeAp $ hoistFreeAp (parallel <<< evalM render dsref) p
     Fork hmu k -> do
-      fid <- fresh ForkId ref
-      DriverState ({ forks }) <- liftEffect (Ref.read ref)
+      fid <- fresh ForkId dsref
+      DriverState ({ forks }) <- liftEffect (Ref.read dsref)
       doneRef <- liftEffect (Ref.new false)
       fiber <- fork $ finally
         ( liftEffect do
             Ref.modify_ (M.delete fid) forks
             Ref.write true doneRef
         )
-        (evalM render ref hmu)
+        (evalM render dsref hmu)
       liftEffect $ unlessM (Ref.read doneRef) do
         Ref.modify_ (M.insert fid fiber) forks
       pure (k fid)
     Join fid a -> do
-      DriverState { forks } <- liftEffect (Ref.read ref)
+      DriverState { forks } <- liftEffect (Ref.read dsref)
       forkMap <- liftEffect (Ref.read forks)
       traverse_ joinFiber (M.lookup fid forkMap)
       pure a
     Kill fid a -> do
-      DriverState ({ forks }) <- liftEffect (Ref.read ref)
+      DriverState ({ forks }) <- liftEffect (Ref.read dsref)
       forkMap <- liftEffect (Ref.read forks)
       traverse_ (killFiber (error "Cancelled")) (M.lookup fid forkMap)
       pure a
     GetRef (Input.RefLabel p) k -> do
-      DriverState { refs } <- liftEffect (Ref.read ref)
+      maybeRerender stref dsref
+      DriverState { refs } <- liftEffect (Ref.read dsref)
       pure $ k $ M.lookup p refs
 
   evalChildQuery
@@ -156,6 +158,18 @@ evalM render initRef (HalogenM hm) = do
           dsx <- liftEffect (Ref.read var)
           unDriverStateX (\ds -> evalQ render ds.selfRef query) dsx
       reply <$> sequential (unpack evalChild st.children)
+
+  maybeRerender
+    :: forall s' f' act' ps' i' o'
+     . Ref s'
+    -> Ref (DriverState r s' f' act' ps' i' o')
+    -> Aff Unit
+  maybeRerender stref dsref = do
+    st <- liftEffect $ Ref.read stref
+    DriverState { state: st', lifecycleHandlers } <- liftEffect $ Ref.read dsref
+    unless (unsafeRefEq st st') do
+      handleLifecycle lifecycleHandlers (render lifecycleHandlers dsref)
+      liftEffect $ Ref.write st' stref
 
 unsubscribe
   :: forall r s' f' act' ps' i' o'
